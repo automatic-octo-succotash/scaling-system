@@ -10,7 +10,7 @@ from typing import Callable, Iterator
 log = logging.getLogger(__name__)
 
 _BASE = "https://api.rd.services"
-_TOKEN_URL = f"{_BASE}/auth/token"
+_TOKEN_URL = f"{_BASE}/oauth2/token"
 
 
 class RDClient:
@@ -31,15 +31,16 @@ class RDClient:
     # ── token management ──────────────────────────────────────────────────────
 
     def refresh(self) -> None:
-        body = json.dumps({
+        body = urllib.parse.urlencode({
             "client_id": self._client_id,
             "client_secret": self._client_secret,
             "refresh_token": self.refresh_token,
+            "grant_type": "refresh_token",
         }).encode()
         req = urllib.request.Request(
             _TOKEN_URL,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -50,7 +51,7 @@ class RDClient:
 
         self.access_token = data["access_token"]
         self.refresh_token = data.get("refresh_token", self.refresh_token)
-        expires_in = int(data.get("expires_in", 86400))
+        expires_in = int(data.get("expires_in", 7200))
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
         if self._on_refresh:

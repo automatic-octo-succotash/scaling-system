@@ -54,7 +54,7 @@ from datetime import datetime, timezone, timedelta
 # ── config ────────────────────────────────────────────────────────────────────
 
 REDIRECT_URI = "http://localhost:3000/callback"
-TOKEN_URL    = "https://api.rd.services/auth/token?token_by=code"
+TOKEN_URL    = "https://api.rd.services/oauth2/token"
 
 # CRM-specific auth dialog vs the generic one — try AUTH_URL=crm if the default
 # produces a global token that the CRM API rejects.
@@ -90,39 +90,39 @@ def decode_jwt_payload(token: str) -> dict:
 
 
 def warn_if_global(token: str) -> None:
+    """Warn if the token is a JWT M2M (global) token — opaque tokens are fine."""
+    # Opaque tokens (correct) can't be decoded; skip the check.
+    if token.count(".") < 2:
+        return
     payload = decode_jwt_payload(token)
+    if not payload:
+        return
     sub = payload.get("sub", "")
     scope = payload.get("scope", "")
-
     if sub.endswith("@clients") or scope == "":
         print()
-        print("  ⚠  WARNING: this token looks like a global/partner token.")
+        print("  ⚠  WARNING: this token looks like a global/partner JWT token.")
         print("     sub:   ", sub)
         print("     scope: ", scope or "(empty)")
         print()
-        print("     The CRM v2 API will reject it with:")
-        print("       'The access token is global, but the current plugin")
-        print("        is configured without global_credentials'")
-        print()
-        print("     To fix:")
-        print("       1. In the RD Station developer portal, create a new app")
-        print("          WITHOUT 'global access' enabled.")
-        print("       2. Update RD_CLIENT_ID / RD_CLIENT_SECRET in your secret.")
-        print("       3. Re-run this script with AUTH_URL=crm")
+        print("     The CRM v2 API will reject it. Make sure you are using")
+        print("     the /oauth2/token endpoint with grant_type=authorization_code")
+        print("     and Content-Type: application/x-www-form-urlencoded.")
         print()
 
 
 def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
-    payload = json.dumps({
+    payload = urllib.parse.urlencode({
         "client_id":     client_id,
         "client_secret": client_secret,
         "code":          code,
         "redirect_uri":  REDIRECT_URI,
+        "grant_type":    "authorization_code",
     }).encode()
     req = urllib.request.Request(
         TOKEN_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -155,11 +155,14 @@ def insert_tokens(access_token: str, refresh_token: str, expires_in: int) -> Non
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"\n  kubectl exec failed:\n{result.stderr.strip()}")
-        print("\n  Run this SQL manually:\n")
-        print(f"  kubectl exec -n {KUBE_NAMESPACE} {POSTGRES_POD} -- psql -U {POSTGRES_USER} -d {POSTGRES_DB} -c \"...\"")
-        print(sql)
-        sys.exit(1)
+        sql_file = "seed_oauth.sql"
+        with open(sql_file, "w") as f:
+            f.write(sql + "\n")
+        print(f"\n  kubectl exec failed (no cluster reachable — this is expected in dev).")
+        print(f"  SQL written to: {sql_file}")
+        print(f"\n  Run it manually once a cluster is available:")
+        print(f"  kubectl exec -n {KUBE_NAMESPACE} {POSTGRES_POD} -- psql -U {POSTGRES_USER} -d {POSTGRES_DB} -f /dev/stdin < {sql_file}")
+        return
 
     print("  crm.oauth_state updated.")
 
@@ -210,7 +213,7 @@ def main():
 
     access_token  = data.get("access_token")
     refresh_token = data.get("refresh_token")
-    expires_in    = int(data.get("expires_in", 86400))
+    expires_in    = int(data.get("expires_in", 7200))
 
     if not access_token or not refresh_token:
         print(f"  Unexpected response: {data}")
