@@ -98,37 +98,24 @@ class RDClient:
         self,
         path: str,
         params: dict | None = None,
-        items_key: str | None = None,
     ) -> Iterator[dict]:
-        """Yield every item across all pages of a list endpoint."""
+        """Yield every item across all pages of a list endpoint.
+
+        All RD Station CRM v2 list endpoints return:
+            {"data": [...], "links": {"next": "...", ...}}
+        Pagination stops when "links.next" is absent.
+        """
         params = dict(params or {})
-        params.setdefault("page_size", 125)
+        params.setdefault("page[size]", 100)
         page = 1
 
         while True:
-            params["page"] = page
-            body, headers = self.get(path, params)
+            params["page[number]"] = page
+            body, _ = self.get(path, params)
 
-            if items_key and isinstance(body, dict):
-                items = body.get(items_key, [])
-            elif isinstance(body, list):
-                items = body
-            else:
-                # try common envelope keys
-                items = next(
-                    (body[k] for k in ("deals", "users", "products", "stages", "pipelines") if k in body),
-                    [],
-                )
-
+            items = body.get("data", []) if isinstance(body, dict) else body
             yield from items
 
-            total = int(
-                headers.get("pagination-total-rows")
-                or headers.get("Pagination-Total-Rows")
-                or 0
-            )
-            page_size = int(params["page_size"])
-
-            if not items or (total > 0 and page * page_size >= total):
+            if not isinstance(body, dict) or not body.get("links", {}).get("next"):
                 break
             page += 1

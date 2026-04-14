@@ -52,42 +52,23 @@ def sync_deals(client: RDClient, conn, now: datetime, last_sync: datetime | None
 
 
 def sync_pipelines(client: RDClient, conn, now: datetime) -> None:
-    # Discover pipeline IDs from whatever is in raw_deals — no list-all endpoint
-    # exists in the RD Station CRM v2 API.
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT pipeline_id FROM crm.raw_deals WHERE pipeline_id IS NOT NULL"
-        )
-        pipeline_ids = [row[0] for row in cur.fetchall()]
+    pipelines = list(client.paginate("/crm/v2/pipelines"))
+    log.info("Syncing %d pipeline(s)...", len(pipelines))
 
-    log.info("Syncing %d pipeline(s)...", len(pipeline_ids))
-
-    for pid in pipeline_ids:
+    for pipeline in pipelines:
+        pid = pipeline["id"]
         try:
-            pipeline, _ = client.get(f"/crm/v2/pipelines/{pid}")
             db.upsert_raw_pipeline(conn, pipeline, now)
-            db.normalize_pipelines(conn)
 
-            # Stages may be embedded in the pipeline response (preferred) or
-            # available at a sub-endpoint. Try both.
-            stages = (
-                pipeline.get("stages")
-                or pipeline.get("deal_stages")
-                or []
-            )
-            if not stages:
-                try:
-                    body, _ = client.get(f"/crm/v2/pipelines/{pid}/stages")
-                    stages = body if isinstance(body, list) else body.get("stages", [])
-                except Exception as exc:
-                    log.warning("Could not fetch stages for pipeline %s via sub-endpoint: %s", pid, exc)
-
+            stages = list(client.paginate(f"/crm/v2/pipelines/{pid}/stages"))
             db.upsert_raw_pipeline_stages(conn, stages, pid, now)
-            db.normalize_pipeline_stages(conn)
             log.info("Pipeline %s: %d stage(s)", pid, len(stages))
 
         except Exception as exc:
             log.error("Failed to sync pipeline %s: %s", pid, exc)
+
+    db.normalize_pipelines(conn)
+    db.normalize_pipeline_stages(conn)
 
 
 def run(client: RDClient, conn) -> None:
