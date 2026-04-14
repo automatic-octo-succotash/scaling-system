@@ -31,15 +31,15 @@ def sync_deals(client: RDClient, conn, now: datetime, last_sync: datetime | None
     cutoff = (now - timedelta(days=_ROLLING_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Won deals — rolling 12-month window.
-    # On subsequent runs we also filter by updated_at to avoid re-fetching the
-    # entire history. A 1-hour buffer guards against clock skew.
-    won_filter = f"status:won AND closed_at>={cutoff}"
+    # Date filters use bracket params (closed_at[gte], updated_at[gte]) not
+    # inline AND syntax, which the API does not support.
+    won_params: dict = {"filter": "status:won", "closed_at[gte]": cutoff, "order": "updated_at:asc"}
     if last_sync:
         since = (last_sync - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        won_filter += f" AND updated_at>={since}"
+        won_params["updated_at[gte]"] = since
 
-    log.info("Syncing won deals (filter: %s)...", won_filter)
-    won = list(client.paginate("/crm/v2/deals", {"filter": won_filter, "order": "updated_at:asc"}))
+    log.info("Syncing won deals (closed_at >= %s)...", cutoff)
+    won = list(client.paginate("/crm/v2/deals", won_params))
     count = db.upsert_raw_deals(conn, won, now)
     log.info("Won deals: %d upserted", count)
 
