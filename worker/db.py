@@ -317,15 +317,15 @@ def normalize_deals(conn) -> None:
                     payload->>'deal_stage_id'
                 ) AS stage_id,
                 -- set owner_id to NULL if the user isn't in crm.users yet
-                CASE WHEN COALESCE(payload->>'user_id', payload->'user'->>'id', payload->'owner'->>'id')
+                CASE WHEN COALESCE(payload->>'owner_id', payload->>'user_id', payload->'user'->>'id', payload->'owner'->>'id')
                               IN (SELECT id FROM crm.users)
-                     THEN COALESCE(payload->>'user_id', payload->'user'->>'id', payload->'owner'->>'id')
+                     THEN COALESCE(payload->>'owner_id', payload->>'user_id', payload->'user'->>'id', payload->'owner'->>'id')
                      ELSE NULL
                 END AS owner_id,
                 NULLIF(COALESCE(payload->>'closed_at', payload->>'win_time'), '')::timestamptz AS won_at,
                 NULLIF(payload->>'created_at', '')::timestamptz AS created_at,
                 NULLIF(payload->>'updated_at', '')::timestamptz AS updated_at,
-                NULLIF(payload->>'amount', '')::numeric AS amount
+                NULLIF(COALESCE(payload->>'total_price', payload->>'amount'), '')::numeric AS amount
             FROM crm.raw_deals
             WHERE
                 -- skip deals whose pipeline or stage isn't loaded yet
