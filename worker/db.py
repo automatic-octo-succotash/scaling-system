@@ -131,6 +131,27 @@ def upsert_raw_deals(conn, deals: list[dict], synced_at: datetime) -> int:
     return len(rows)
 
 
+def upsert_raw_simple(conn, table: str, items: list[dict], synced_at: datetime) -> int:
+    """Generic upsert for raw tables with schema (id, payload, synced_at)."""
+    if not items:
+        return 0
+    rows = [(item["id"], json.dumps(item), synced_at) for item in items]
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            f"""
+            INSERT INTO {table} (id, payload, synced_at)
+            VALUES %s
+            ON CONFLICT (id) DO UPDATE SET
+                payload   = EXCLUDED.payload,
+                synced_at = EXCLUDED.synced_at
+            """,
+            rows,
+        )
+    conn.commit()
+    return len(rows)
+
+
 def upsert_raw_users(conn, users: list[dict], synced_at: datetime) -> int:
     if not users:
         return 0
@@ -300,13 +321,66 @@ def normalize_pipeline_stages(conn) -> None:
     conn.commit()
 
 
+def normalize_sources(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crm.sources (id, name)
+            SELECT id, payload->>'name'
+            FROM crm.raw_sources
+            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            """
+        )
+    conn.commit()
+
+
+def normalize_campaigns(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crm.campaigns (id, name)
+            SELECT id, payload->>'name'
+            FROM crm.raw_campaigns
+            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            """
+        )
+    conn.commit()
+
+
+def normalize_organizations(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crm.organizations (id, name)
+            SELECT id, payload->>'name'
+            FROM crm.raw_organizations
+            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            """
+        )
+    conn.commit()
+
+
+def normalize_contacts(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crm.contacts (id, name)
+            SELECT id, payload->>'name'
+            FROM crm.raw_contacts
+            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            """
+        )
+    conn.commit()
+
+
 def normalize_deals(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO crm.deals
                 (id, name, status, pipeline_id, stage_id, owner_id,
-                 won_at, created_at, updated_at, amount)
+                 won_at, created_at, updated_at, amount,
+                 source_id, campaign_id, organization_id)
             SELECT
                 id,
                 payload->>'name',
@@ -330,7 +404,13 @@ def normalize_deals(conn) -> None:
                 NULLIF(COALESCE(payload->>'closed_at', payload->>'win_time'), '')::timestamptz AS won_at,
                 NULLIF(payload->>'created_at', '')::timestamptz AS created_at,
                 NULLIF(payload->>'updated_at', '')::timestamptz AS updated_at,
-                NULLIF(COALESCE(payload->>'total_price', payload->>'amount'), '')::numeric AS amount
+                NULLIF(COALESCE(payload->>'total_price', payload->>'amount'), '')::numeric AS amount,
+                CASE WHEN payload->>'source_id' IN (SELECT id FROM crm.sources)
+                     THEN payload->>'source_id' ELSE NULL END AS source_id,
+                CASE WHEN payload->>'campaign_id' IN (SELECT id FROM crm.campaigns)
+                     THEN payload->>'campaign_id' ELSE NULL END AS campaign_id,
+                CASE WHEN payload->>'organization_id' IN (SELECT id FROM crm.organizations)
+                     THEN payload->>'organization_id' ELSE NULL END AS organization_id
             FROM crm.raw_deals
             WHERE
                 -- skip deals whose pipeline or stage isn't loaded yet
@@ -344,15 +424,18 @@ def normalize_deals(conn) -> None:
                        AND ps.pipeline_id = COALESCE(payload->>'pipeline_id', payload->'deal_pipeline'->>'id')
                 )
             ON CONFLICT (id) DO UPDATE SET
-                name        = EXCLUDED.name,
-                status      = EXCLUDED.status,
-                pipeline_id = EXCLUDED.pipeline_id,
-                stage_id    = EXCLUDED.stage_id,
-                owner_id    = EXCLUDED.owner_id,
-                won_at      = EXCLUDED.won_at,
-                created_at  = EXCLUDED.created_at,
-                updated_at  = EXCLUDED.updated_at,
-                amount      = EXCLUDED.amount
+                name            = EXCLUDED.name,
+                status          = EXCLUDED.status,
+                pipeline_id     = EXCLUDED.pipeline_id,
+                stage_id        = EXCLUDED.stage_id,
+                owner_id        = EXCLUDED.owner_id,
+                won_at          = EXCLUDED.won_at,
+                created_at      = EXCLUDED.created_at,
+                updated_at      = EXCLUDED.updated_at,
+                amount          = EXCLUDED.amount,
+                source_id       = EXCLUDED.source_id,
+                campaign_id     = EXCLUDED.campaign_id,
+                organization_id = EXCLUDED.organization_id
             """
         )
     conn.commit()
@@ -396,6 +479,29 @@ def normalize_deal_products(conn) -> None:
             WHERE rdp.deal_id   IN (SELECT id FROM crm.deals)
               AND rdp.product_id IN (SELECT id FROM crm.products)
             ON CONFLICT (deal_id, product_id) DO NOTHING
+            """
+        )
+    conn.commit()
+
+
+def normalize_deal_contacts(conn) -> None:
+    with conn.cursor() as cur:
+        # Truncate and rebuild from scratch — contact_ids arrays can shrink.
+        cur.execute("TRUNCATE crm.deal_contacts")
+        cur.execute(
+            """
+            INSERT INTO crm.deal_contacts (deal_id, contact_id)
+            SELECT d.id, cid.value
+            FROM crm.raw_deals AS d,
+            LATERAL jsonb_array_elements_text(
+                CASE WHEN jsonb_typeof(d.payload->'contact_ids') = 'array'
+                     THEN d.payload->'contact_ids'
+                     ELSE '[]'::jsonb
+                END
+            ) AS cid(value)
+            WHERE d.id        IN (SELECT id FROM crm.deals)
+              AND cid.value   IN (SELECT id FROM crm.contacts)
+            ON CONFLICT (deal_id, contact_id) DO NOTHING
             """
         )
     conn.commit()

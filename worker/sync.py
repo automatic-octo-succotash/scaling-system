@@ -27,6 +27,38 @@ def sync_products(client: RDClient, conn, now: datetime) -> None:
     log.info("Products: %d upserted", count)
 
 
+def sync_sources(client: RDClient, conn, now: datetime) -> None:
+    log.info("Syncing sources...")
+    items = list(client.paginate("/crm/v2/sources"))
+    count = db.upsert_raw_simple(conn, "crm.raw_sources", items, now)
+    db.normalize_sources(conn)
+    log.info("Sources: %d upserted", count)
+
+
+def sync_campaigns(client: RDClient, conn, now: datetime) -> None:
+    log.info("Syncing campaigns...")
+    items = list(client.paginate("/crm/v2/campaigns"))
+    count = db.upsert_raw_simple(conn, "crm.raw_campaigns", items, now)
+    db.normalize_campaigns(conn)
+    log.info("Campaigns: %d upserted", count)
+
+
+def sync_organizations(client: RDClient, conn, now: datetime) -> None:
+    log.info("Syncing organizations...")
+    items = list(client.paginate("/crm/v2/organizations"))
+    count = db.upsert_raw_simple(conn, "crm.raw_organizations", items, now)
+    db.normalize_organizations(conn)
+    log.info("Organizations: %d upserted", count)
+
+
+def sync_contacts(client: RDClient, conn, now: datetime) -> None:
+    log.info("Syncing contacts...")
+    items = list(client.paginate("/crm/v2/contacts"))
+    count = db.upsert_raw_simple(conn, "crm.raw_contacts", items, now)
+    db.normalize_contacts(conn)
+    log.info("Contacts: %d upserted", count)
+
+
 def sync_deals(client: RDClient, conn, now: datetime, last_sync: datetime | None) -> None:
     cutoff = (now - timedelta(days=_ROLLING_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -96,12 +128,17 @@ def run(client: RDClient, conn) -> None:
     try:
         sync_users(client, conn, now)
         sync_products(client, conn, now)
+        sync_sources(client, conn, now)
+        sync_campaigns(client, conn, now)
+        sync_organizations(client, conn, now)
+        sync_contacts(client, conn, now)
         sync_deals(client, conn, now, last_sync)
         sync_pipelines(client, conn, now)
 
-        # Normalize deals and their products after all reference data is loaded.
+        # Normalize deals and associations after all reference data is loaded.
         log.info("Normalizing deals...")
         db.normalize_deals(conn)
+        db.normalize_deal_contacts(conn)
         sync_deal_products(client, conn, now)
         db.normalize_deal_products(conn)
 
