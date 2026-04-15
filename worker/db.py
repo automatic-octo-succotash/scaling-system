@@ -259,10 +259,15 @@ def normalize_pipelines(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO crm.pipelines (id, name)
-            SELECT id, payload->>'name'
+            INSERT INTO crm.pipelines (id, name, position)
+            SELECT
+                id,
+                payload->>'name',
+                COALESCE((payload->>'order')::int, 0)
             FROM crm.raw_pipelines
-            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            ON CONFLICT (id) DO UPDATE SET
+                name     = EXCLUDED.name,
+                position = EXCLUDED.position
             """
         )
     conn.commit()
@@ -278,8 +283,8 @@ def normalize_pipeline_stages(conn) -> None:
                 pipeline_id,
                 payload->>'name',
                 COALESCE(
+                    (payload->>'order')::int,
                     (payload->>'step_id')::int,
-                    (payload->>'position')::int,
                     (payload->>'index')::int,
                     0
                 )
