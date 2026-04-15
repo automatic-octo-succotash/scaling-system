@@ -364,10 +364,12 @@ def normalize_contacts(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO crm.contacts (id, name)
-            SELECT id, payload->>'name'
+            INSERT INTO crm.contacts (id, name, job_title)
+            SELECT id, payload->>'name', NULLIF(payload->>'job_title', '')
             FROM crm.raw_contacts
-            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+            ON CONFLICT (id) DO UPDATE SET
+                name      = EXCLUDED.name,
+                job_title = EXCLUDED.job_title
             """
         )
     conn.commit()
