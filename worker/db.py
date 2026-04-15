@@ -358,6 +358,12 @@ def normalize_deals(conn) -> None:
     conn.commit()
 
 
+def truncate_raw_deal_products(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE crm.raw_deal_products")
+    conn.commit()
+
+
 def get_all_product_ids(conn) -> list:
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM crm.products")

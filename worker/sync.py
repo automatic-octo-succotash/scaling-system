@@ -74,10 +74,12 @@ def sync_pipelines(client: RDClient, conn, now: datetime) -> None:
 def sync_deal_products(client: RDClient, conn, now: datetime) -> None:
     product_ids = db.get_all_product_ids(conn)
     log.info("Syncing deal-product associations for %d product(s)...", len(product_ids))
+    # Truncate first so stale associations are removed each run.
+    db.truncate_raw_deal_products(conn)
     total = 0
     for product_id in product_ids:
         try:
-            deals = list(client.paginate("/crm/v2/deals", {"product_ids": product_id}))
+            deals = list(client.paginate("/crm/v2/deals", {"filter": f"product_ids:{product_id}"}))
             deal_ids = [d["id"] for d in deals if "id" in d]
             db.upsert_raw_deal_product_associations(conn, product_id, deal_ids, now)
             log.info("Product %s: %d deal(s)", product_id, len(deal_ids))
