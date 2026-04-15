@@ -106,7 +106,7 @@ class RDClient:
         Pagination stops when "links.next" is absent.
         """
         params = dict(params or {})
-        params.setdefault("page[size]", 100)
+        params.setdefault("page[size]", 200)
         page = 1
 
         while True:
