@@ -72,20 +72,19 @@ def sync_pipelines(client: RDClient, conn, now: datetime) -> None:
 
 
 def sync_deal_products(client: RDClient, conn, now: datetime) -> None:
-    deal_ids = db.get_deals_needing_product_sync(conn)
-    log.info("Fetching products for %d ongoing deal(s)...", len(deal_ids))
-    for deal_id in deal_ids:
+    product_ids = db.get_all_product_ids(conn)
+    log.info("Syncing deal-product associations for %d product(s)...", len(product_ids))
+    total = 0
+    for product_id in product_ids:
         try:
-            resp, _ = client.get(f"/crm/v2/deals/{deal_id}/products")
-            items = (
-                resp.get("data", []) if isinstance(resp, dict)
-                else resp if isinstance(resp, list)
-                else []
-            )
-            db.upsert_raw_deal_products(conn, deal_id, items, now)
+            deals = list(client.paginate("/crm/v2/deals", {"product_ids": product_id}))
+            deal_ids = [d["id"] for d in deals if "id" in d]
+            db.upsert_raw_deal_product_associations(conn, product_id, deal_ids, now)
+            log.info("Product %s: %d deal(s)", product_id, len(deal_ids))
+            total += len(deal_ids)
         except Exception as exc:
-            log.warning("Failed to fetch products for deal %s: %s", deal_id, exc)
-    log.info("Deal products: fetched for %d deal(s)", len(deal_ids))
+            log.warning("Failed to fetch deals for product %s: %s", product_id, exc)
+    log.info("Deal-product associations: %d total", total)
 
 
 def run(client: RDClient, conn) -> None:

@@ -358,33 +358,24 @@ def normalize_deals(conn) -> None:
     conn.commit()
 
 
-def get_deals_needing_product_sync(conn) -> list:
-    """Return IDs of ongoing deals whose products we haven't fetched yet,
-    or whose deal record was updated after the last product fetch."""
+def get_all_product_ids(conn) -> list:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT d.id
-            FROM crm.deals AS d
-            LEFT JOIN crm.raw_deal_products AS rdp ON rdp.deal_id = d.id
-            WHERE d.status = 'ongoing'
-              AND (rdp.deal_id IS NULL OR d.updated_at > rdp.synced_at)
-            """
-        )
+        cur.execute("SELECT id FROM crm.products")
         return [row[0] for row in cur.fetchall()]
 
 
-def upsert_raw_deal_products(conn, deal_id: str, items: list, now) -> None:
+def upsert_raw_deal_product_associations(conn, product_id: str, deal_ids: list, now) -> None:
+    if not deal_ids:
+        return
     with conn.cursor() as cur:
-        cur.execute(
+        psycopg2.extras.execute_values(
+            cur,
             """
-            INSERT INTO crm.raw_deal_products (deal_id, payload, synced_at)
-            VALUES (%s, %s::jsonb, %s)
-            ON CONFLICT (deal_id) DO UPDATE SET
-                payload   = EXCLUDED.payload,
-                synced_at = EXCLUDED.synced_at
+            INSERT INTO crm.raw_deal_products (deal_id, product_id, synced_at)
+            VALUES %s
+            ON CONFLICT (deal_id, product_id) DO UPDATE SET synced_at = EXCLUDED.synced_at
             """,
-            (deal_id, json.dumps(items), now),
+            [(deal_id, product_id, now) for deal_id in deal_ids],
         )
     conn.commit()
 
@@ -393,23 +384,12 @@ def normalize_deal_products(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO crm.deal_products (deal_id, product_id, quantity, amount)
-            SELECT
-                rdp.deal_id,
-                p->>'id'                              AS product_id,
-                NULLIF(p->>'quantity', '')::numeric   AS quantity,
-                COALESCE(
-                    NULLIF(p->>'price', '')::numeric,
-                    NULLIF(p->>'amount', '')::numeric
-                )                                     AS amount
-            FROM crm.raw_deal_products AS rdp,
-            LATERAL jsonb_array_elements(rdp.payload) AS p
-            WHERE p->>'id' IS NOT NULL
-              AND rdp.deal_id IN (SELECT id FROM crm.deals)
-              AND p->>'id' IN (SELECT id FROM crm.products)
-            ON CONFLICT (deal_id, product_id) DO UPDATE SET
-                quantity = EXCLUDED.quantity,
-                amount   = EXCLUDED.amount
+            INSERT INTO crm.deal_products (deal_id, product_id)
+            SELECT rdp.deal_id, rdp.product_id
+            FROM crm.raw_deal_products AS rdp
+            WHERE rdp.deal_id   IN (SELECT id FROM crm.deals)
+              AND rdp.product_id IN (SELECT id FROM crm.products)
+            ON CONFLICT (deal_id, product_id) DO NOTHING
             """
         )
     conn.commit()
