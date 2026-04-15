@@ -71,6 +71,23 @@ def sync_pipelines(client: RDClient, conn, now: datetime) -> None:
     db.normalize_pipeline_stages(conn)
 
 
+def sync_deal_products(client: RDClient, conn, now: datetime) -> None:
+    deal_ids = db.get_deals_needing_product_sync(conn)
+    log.info("Fetching products for %d ongoing deal(s)...", len(deal_ids))
+    for deal_id in deal_ids:
+        try:
+            resp, _ = client.get(f"/crm/v2/deals/{deal_id}/products")
+            items = (
+                resp.get("data", []) if isinstance(resp, dict)
+                else resp if isinstance(resp, list)
+                else []
+            )
+            db.upsert_raw_deal_products(conn, deal_id, items, now)
+        except Exception as exc:
+            log.warning("Failed to fetch products for deal %s: %s", deal_id, exc)
+    log.info("Deal products: fetched for %d deal(s)", len(deal_ids))
+
+
 def run(client: RDClient, conn) -> None:
     now = datetime.now(timezone.utc)
     last_sync = db.get_last_sync(conn, "worker")
@@ -84,6 +101,7 @@ def run(client: RDClient, conn) -> None:
         # Normalize deals and their products after all reference data is loaded.
         log.info("Normalizing deals...")
         db.normalize_deals(conn)
+        sync_deal_products(client, conn, now)
         db.normalize_deal_products(conn)
 
         db.refresh_deal_metrics(conn)
